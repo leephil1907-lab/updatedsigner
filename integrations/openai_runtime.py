@@ -119,6 +119,7 @@ Prefer concise, operational outputs:
             inspect_objectives,
             inspect_receipt,
         ],
+        model_settings=ModelSettings(reasoning=Reasoning(effort=OPENAI_REASONING), verbosity="medium"),
     )
 
 
