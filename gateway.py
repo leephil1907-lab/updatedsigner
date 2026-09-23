@@ -1,7 +1,6 @@
 from __future__ import annotations
 import asyncio, importlib.util, json, os, sys, time, uuid, sqlite3, hashlib, secrets
 from contextlib import asynccontextmanager
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,11 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from integrations.capabilities import status as capability_status, dify_run, firecrawl_action, orca_run, delta_diff
-from integrations.openai_runtime import status as openai_status, run as openai_run
-try:
-    from mcp_server import mcp as mcp_server
-except Exception:
-    mcp_server = None
 from integrations.openai_runtime import status as openai_status, run as openai_run
 try:
     from mcp_server import mcp as mcp_server
@@ -43,8 +37,6 @@ app=FastAPI(title="Agent Command Center Gateway",version="4.1.0",lifespan=app_li
 app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:8000").split(",") if x.strip()],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 FRONTEND=ROOT/"dist"; STATIC_ROOT=FRONTEND if FRONTEND.exists() else ROOT
 app.mount("/assets",StaticFiles(directory=STATIC_ROOT/"assets" if (STATIC_ROOT/"assets").exists() else STATIC_ROOT),name="assets")
-if mcp_server is not None:
-    app.mount("/mcp",mcp_server.streamable_http_app(host="0.0.0.0",stateless_http=True,json_response=True),name="mcp")
 if mcp_server is not None:
     app.mount("/mcp",mcp_server.streamable_http_app(host="0.0.0.0",stateless_http=True,json_response=True),name="mcp")
 _wow=None
@@ -188,7 +180,8 @@ async def objectives():
 return {"items":sorted(OBJECTIVES.values(),key=lambda x:x.get("createdAt",""),reverse=True)}
 
 def auth_db():
-    x=sqlite3.connect(AUTH_DB);x.row_factory=sqlite3.Row    x.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT NOT NULL,created_at TEXT NOT NULL)")
+    x=sqlite3.connect(AUTH_DB);x.row_factory=sqlite3.Row
+    x.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT NOT NULL,created_at TEXT NOT NULL)")
     x.execute("CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL,created_at TEXT NOT NULL)")
     x.commit();return x
 def hash_password(password,salt=None):
@@ -208,7 +201,8 @@ async def auth_signup(payload:dict[str,Any],response:Response):
     if not name or "@" not in email or len(password)<8:raise HTTPException(422,detail="Name, valid email and password of at least 8 characters are required.")
     uid="usr_"+secrets.token_hex(10);token=secrets.token_urlsafe(32)
     try:
-        with auth_db() as x:x.execute("INSERT INTO users VALUES(?,?,?,?,?)",(uid,email,hash_password(password),name,now()));x.execute("INSERT INTO sessions VALUES(?,?,?)",(token,uid,now()));x.commit()    except sqlite3.IntegrityError:raise HTTPException(409,detail="An account with this email already exists.")
+        with auth_db() as x:x.execute("INSERT INTO users VALUES(?,?,?,?,?)",(uid,email,hash_password(password),name,now()));x.execute("INSERT INTO sessions VALUES(?,?,?)",(token,uid,now()));x.commit()
+    except sqlite3.IntegrityError:raise HTTPException(409,detail="An account with this email already exists.")
     response.set_cookie("agent_session",token,httponly=True,samesite="lax",secure=os.getenv("COOKIE_SECURE","0")=="1",max_age=2592000)
     return {"user":public_user({"id":uid,"email":email,"name":name,"created_at":now()})}
 
