@@ -331,21 +331,27 @@ async def oauth_authorize(request:Request):
     token=request.cookies.get("agent_session")
     user=auth_user(request) if token else None
     state=html.escape(q.get("state",""),quote=True); client=html.escape(q["client_id"],quote=True)
+    hidden="".join(f'<input type="hidden" name="{html.escape(k,quote=True)}" value="{html.escape(v,quote=True)}">' for k,v in q.items())
     if not user:
-        hidden="".join(f'<input type="hidden" name="{html.escape(k,quote=True)}" value="{html.escape(v,quote=True)}">' for k,v in q.items())
-        return HTMLResponse(f"""<!doctype html><html><body style="font-family:system-ui;max-width:520px;margin:60px auto;padding:24px"><h1>Connect Agent Command Center</h1><p>Sign in to authorize this MCP client.</p><form method="post" action="/oauth/authorize">{hidden}<label>Email<br><input name="email" type="email" required></label><br><label>Password<br><input name="password" type="password" required></label><br><button>Sign in & authorize</button></form></body></html>""")
-    code=secrets.token_urlsafe(48);oauth_code_store(code,q["client_id"],q["redirect_uri"],q["code_challenge"],scope,user["id"],q["resource"])
-    sep="&" if "?" in q["redirect_uri"] else "?"
-    location=q["redirect_uri"]+sep+urllib.parse.urlencode({"code":code,"state":q.get("state",""),"iss":oauth_issuer()})
-    return RedirectResponse(location)
+        return HTMLResponse(f"""<!doctype html><html><body style="font-family:system-ui;max-width:520px;margin:60px auto;padding:24px"><h1>Connect Agent Command Center</h1><p>Sign in to authorize <b>{client}</b>.</p><form method="post" action="/oauth/authorize">{hidden}<label>Email<br><input name="email" type="email" required></label><br><label>Password<br><input name="password" type="password" required></label><br><label><input name="approve" value="1" type="checkbox" required> Allow this MCP client to access: {html.escape(scope)}</label><br><button>Sign in & authorize</button></form></body></html>""")
+    return HTMLResponse(f"""<!doctype html><html><body style="font-family:system-ui;max-width:520px;margin:60px auto;padding:24px"><h1>Authorize Agent Command Center</h1><p>Client: <b>{client}</b></p><p>Requested permissions: <code>{html.escape(scope)}</code></p><form method="post" action="/oauth/authorize">{hidden}<label><input name="approve" value="1" type="checkbox" required> I approve these permissions</label><br><button>Approve</button></form></body></html>""")
 
 @app.post("/oauth/authorize")
-async def oauth_authorize_post(request:Request):
-    form=await request.form(); email=str(form.get("email","")).strip().lower(); password=str(form.get("password",""))
-    with auth_db() as db: row=db.execute("SELECT * FROM users WHERE email=?",(email,)).fetchone()
-    if not row or not valid_password(password,row["password_hash"]): return HTMLResponse("<h1>Invalid credentials</h1><p>Go back and try again.</p>",status_code=401)
-    token=secrets.token_urlsafe(48); q=dict(form); q.pop("email",None);q.pop("password",None)
-    code=secrets.token_urlsafe(48);oauth_code_store(code,q["client_id"],q["redirect_uri"],q["code_challenge"],q.get("scope","mcp:read"),row["id"],q["resource"])
+async def oauth_authorize_post(request:Request,response:Response):
+    form=await request.form()
+    if form.get("approve")!="1": return HTMLResponse("<h1>Authorization cancelled</h1>",status_code=403)
+    user=auth_user(request)
+    if user is None:
+        email=str(form.get("email","")).strip().lower(); password=str(form.get("password",""))
+        with auth_db() as db: user_row=db.execute("SELECT * FROM users WHERE email=?",(email,)).fetchone()
+        if not user_row or not valid_password(password,user_row["password_hash"]): return HTMLResponse("<h1>Invalid credentials</h1><p>Go back and try again.</p>",status_code=401)
+        user=dict(user_row)
+    q=dict(form)
+    for k in ("email","password","approve"): q.pop(k,None)
+    requested=set(str(q.get("scope","mcp:read")).split())
+    scope=" ".join(sorted(requested & OAUTH_SCOPES)) or "mcp:read"
+    code=secrets.token_urlsafe(48)
+    oauth_code_store(code,q["client_id"],q["redirect_uri"],q["code_challenge"],scope,user["id"],q["resource"])
     sep="&" if "?" in q["redirect_uri"] else "?"
     return RedirectResponse(q["redirect_uri"]+sep+urllib.parse.urlencode({"code":code,"state":q.get("state",""),"iss":oauth_issuer()}),status_code=303)
 
