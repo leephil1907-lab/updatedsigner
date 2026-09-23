@@ -3,3 +3,6 @@ uvicorn[standard]>=0.30,<1
 httpx>=0.27,<1
 openai-agents>=0.22.3,<0.23
 mcp>=1.19,<3
+
+PyJWT>=2.10,<3
+cryptography>=44,<47
