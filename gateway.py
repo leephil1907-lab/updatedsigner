@@ -106,10 +106,10 @@ class MCPAuthMiddleware:
             return await self.app(scope,receive,send)
         headers={k.decode().lower():v.decode() for k,v in scope.get("headers",[])}
         auth=headers.get("authorization","")
+        resource=OAUTH_RESOURCE
         token=auth.split(" ",1)[1].strip() if auth.lower().startswith("bearer ") else ""
         claims=oauth_verify(token,"mcp:read") if token else None
         if not claims:
-            resource=OAUTH_RESOURCE
             issuer=oauth_issuer()
             body=b'{"error":"unauthorized","error_description":"Valid OAuth access token required."}'
             await send({"type":"http.response.start","status":401,"headers":[(b"content-type",b"application/json"),(b"www-authenticate",f'Bearer resource_metadata="{resource}/.well-known/oauth-protected-resource", scope="mcp:read"'.encode())]})
