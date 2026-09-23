@@ -1,10 +1,10 @@
 from __future__ import annotations
-import asyncio, importlib.util, json, os, sys, time, uuid
+import asyncio, importlib.util, json, os, sys, time, uuid, sqlite3, hashlib, secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +15,7 @@ RUNS=Path(os.getenv("AGENT_CENTER_DATA","~/.agent-command-center")).expanduser()
 RUN_FILE=RUNS/"runs.jsonl"
 OBJECTIVES_FILE=RUNS/"objectives.jsonl"
 OBJECTIVES:dict[str,dict[str,Any]]={}
+AUTH_DB=RUNS/"auth.sqlite3"
 WOW_ROOT=os.getenv("WOW_AGENT_ROOT","").strip()
 BROWSER_URL=os.getenv("BROWSER_USE_URL","").rstrip("/")
 JEV_URL=(os.getenv("JEV_URL") or os.getenv("DECISION_RADAR_URL") or "").rstrip("/")
@@ -153,6 +154,70 @@ async def objectives():
             except Exception: pass
     return {"items":sorted(OBJECTIVES.values(),key=lambda x:x.get("createdAt",""),reverse=True)}
 
+def auth_db():
+    x=sqlite3.connect(AUTH_DB);x.row_factory=sqlite3.Row
+    x.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT NOT NULL,created_at TEXT NOT NULL)")
+    x.execute("CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL,created_at TEXT NOT NULL)")
+    x.commit();return x
+def hash_password(password,salt=None):
+    salt=salt or secrets.token_hex(16);return salt+"$"+hashlib.pbkdf2_hmac("sha256",password.encode(),bytes.fromhex(salt),160000).hex()
+def valid_password(password,stored):
+    salt,value=stored.split("$",1);return secrets.compare_digest(value,hash_password(password,salt).split("$",1)[1])
+def auth_user(req:Request):
+    token=req.cookies.get("agent_session")
+    if not token:return None
+    with auth_db() as x:r=x.execute("SELECT u.id,u.email,u.name,u.created_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?",(token,)).fetchone()
+    return dict(r) if r else None
+def public_user(u):return {"id":u["id"],"email":u["email"],"name":u["name"],"createdAt":u["created_at"]}
+
+@app.post("/api/auth/signup")
+async def auth_signup(payload:dict[str,Any],response:Response):
+    email=str(payload.get("email","")).strip().lower();password=str(payload.get("password",""));name=str(payload.get("name","")).strip()
+    if not name or "@" not in email or len(password)<8:raise HTTPException(422,detail="Name, valid email and password of at least 8 characters are required.")
+    uid="usr_"+secrets.token_hex(10);token=secrets.token_urlsafe(32)
+    try:
+        with auth_db() as x:x.execute("INSERT INTO users VALUES(?,?,?,?,?)",(uid,email,hash_password(password),name,now()));x.execute("INSERT INTO sessions VALUES(?,?,?)",(token,uid,now()));x.commit()
+    except sqlite3.IntegrityError:raise HTTPException(409,detail="An account with this email already exists.")
+    response.set_cookie("agent_session",token,httponly=True,samesite="lax",secure=os.getenv("COOKIE_SECURE","0")=="1",max_age=2592000)
+    return {"user":public_user({"id":uid,"email":email,"name":name,"created_at":now()})}
+
+@app.post("/api/auth/login")
+async def auth_login(payload:dict[str,Any],response:Response):
+    email=str(payload.get("email","")).strip().lower();password=str(payload.get("password",""))
+    with auth_db() as x:r=x.execute("SELECT * FROM users WHERE email=?",(email,)).fetchone()
+    if not r or not valid_password(password,r["password_hash"]):raise HTTPException(401,detail="Invalid email or password.")
+    token=secrets.token_urlsafe(32)
+    with auth_db() as x:x.execute("INSERT INTO sessions VALUES(?,?,?)",(token,r["id"],now()));x.commit()
+    response.set_cookie("agent_session",token,httponly=True,samesite="lax",secure=os.getenv("COOKIE_SECURE","0")=="1",max_age=2592000)
+    return {"user":public_user(r)}
+
+@app.post("/api/auth/logout")
+async def auth_logout(req:Request,response:Response):
+    token=req.cookies.get("agent_session")
+    if token:
+        with auth_db() as x:x.execute("DELETE FROM sessions WHERE token=?",(token,));x.commit()
+    response.delete_cookie("agent_session");return {"ok":True}
+
+@app.get("/api/auth/me")
+async def auth_me(req:Request):
+    u=auth_user(req);return {"authenticated":bool(u),"user":public_user(u) if u else None}
+
+@app.post("/api/auth/forgot")
+async def auth_forgot(payload:dict[str,Any]):
+    email=str(payload.get("email","")).strip().lower()
+    with auth_db() as x:r=x.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone()
+    return {"ok":True,"message":"If an account exists for that email, reset instructions will be sent."}
+
+@app.get("/api/profile")
+async def profile(req:Request):
+    u=auth_user(req)
+    if not u:raise HTTPException(401,detail="Authentication required.")
+    return {"user":public_user(u)}
+
+@app.get("/api/integrations")
+async def integrations(req:Request):
+    if not auth_user(req):raise HTTPException(401,detail="Authentication required.")
+    return {"connections":capability_status(),"skills":[{"id":"objective-orchestration","name":"Objective Orchestration","source":"native"},{"id":"web-intelligence","name":"Web Intelligence","source":"Firecrawl"},{"id":"browser-execution","name":"Browser Execution","source":"Browser Use"},{"id":"supervised-execution","name":"Supervised Execution","source":"WOW-Agent"},{"id":"parallel-runtime","name":"Parallel Runtime","source":"Orca"},{"id":"evidence-rendering","name":"Git Evidence","source":"Delta"}]}
 @app.get("/")
 async def root(): return FileResponse(STATIC_ROOT/"index.html")
 
