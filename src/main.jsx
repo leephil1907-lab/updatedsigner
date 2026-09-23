@@ -11,6 +11,7 @@ import'./app.css';
 
 const api=async(path,opt={})=>{const r=await fetch(path,{credentials:'include',headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});if(!r.ok){let m='Request failed';try{m=(await r.json()).detail||m}catch{}throw Error(m)}return r.status===204?null:r.json()};
 const META={
+ openai:{name:'OpenAI Agent',type:'REASONING AGENT',desc:'OpenAI Agents SDK reasoning, inspection and synthesis.',icon:BrainCircuit},
  browser:{name:'Browser Use',type:'WEB EXECUTION',desc:'Real browser navigation, interaction and extraction.',icon:Globe2},
  jev:{name:'Jev',type:'DECISION LAYER',desc:'Live objective routing and decision discovery.',icon:BrainCircuit},
  wow:{name:'WOW-Agent',type:'SUPERVISED HOST',desc:'Visible-screen execution with bounded supervision.',icon:ShieldCheck},
@@ -27,7 +28,7 @@ function PageHead({title,kicker,action}){return <div className="pageHead"><div><
 function Empty({icon:Icon=Sparkles,title,text}){return <div className="empty"><Icon size={28}/><h3>{title}</h3><p>{text}</p></div>}
 
 
-const PIPELINE=[['jev','Jev'],['dify','Dify'],['firecrawl','Firecrawl'],['browser','Browser Use'],['wow','WOW-Agent'],['orca','Orca'],['delta','Delta']];
+const PIPELINE=[['jev','Jev'],['openai','OpenAI Agent'],['dify','Dify'],['firecrawl','Firecrawl'],['browser','Browser Use'],['wow','WOW-Agent'],['orca','Orca'],['delta','Delta']];
 async function startObjective(text,setEvents,setGraph,setResult){
   const started=await api('/api/objectives/run',{method:'POST',body:JSON.stringify({objective:text})});
   setGraph(started.graph.map(x=>({...x,status:'pending'})));
@@ -64,7 +65,7 @@ function App(){
  useEffect(()=>{if(view==='radar')loadRadar();if(view==='runs')loadRuns();if(view==='receipts'){loadWow();loadObjectives()}if(view==='capabilities')loadCaps();if(view==='connections'||view==='skills')loadConnections()},[view]);
  const execute=async()=>{const text=objective.trim();if(!text){notify('Enter an objective first.');inputRef.current?.focus();return}setBusy(true);setResult(null);setEvents([]);
   try{let d;
-   if(agent==='command'){d=await startObjective(text,setEvents,setGraph,setResult)}else{if(agent==='browser')d=await api('/api/browser/run',{method:'POST',body:JSON.stringify({task:text})});
+   if(agent==='command'){d=await startObjective(text,setEvents,setGraph,setResult)}else{if(agent==='openai')d=await api('/api/openai/run',{method:'POST',body:JSON.stringify({objective:text})});if(agent==='browser')d=await api('/api/browser/run',{method:'POST',body:JSON.stringify({task:text})});
    if(agent==='jev')d=await api('/api/jev/route',{method:'POST',body:JSON.stringify({objective:text})});
    if(agent==='wow')d=await api('/api/wow/activate',{method:'POST',body:JSON.stringify({goal:text})});
    if(agent==='dify')d=await api('/api/dify/run',{method:'POST',body:JSON.stringify({query:text})});
