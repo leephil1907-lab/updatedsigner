@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio, importlib.util, json, os, sys, time, uuid, sqlite3, hashlib, secrets
 from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from integrations.capabilities import status as capability_status, dify_run, firecrawl_action, orca_run, delta_diff
+from integrations.openai_runtime import status as openai_status, run as openai_run
+try:
+    from mcp_server import mcp as mcp_server
+except Exception:
+    mcp_server = None
 from integrations.openai_runtime import status as openai_status, run as openai_run
 try:
     from mcp_server import mcp as mcp_server
@@ -37,6 +43,8 @@ app=FastAPI(title="Agent Command Center Gateway",version="4.1.0",lifespan=app_li
 app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:8000").split(",") if x.strip()],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 FRONTEND=ROOT/"dist"; STATIC_ROOT=FRONTEND if FRONTEND.exists() else ROOT
 app.mount("/assets",StaticFiles(directory=STATIC_ROOT/"assets" if (STATIC_ROOT/"assets").exists() else STATIC_ROOT),name="assets")
+if mcp_server is not None:
+    app.mount("/mcp",mcp_server.streamable_http_app(host="0.0.0.0",stateless_http=True,json_response=True),name="mcp")
 if mcp_server is not None:
     app.mount("/mcp",mcp_server.streamable_http_app(host="0.0.0.0",stateless_http=True,json_response=True),name="mcp")
 _wow=None
@@ -177,7 +185,7 @@ async def objectives():
             try:
                 x=json.loads(line);OBJECTIVES[x["id"]]=x
             except Exception: pass
-    return {"items":sorted(OBJECTIVES.values(),key=lambda x:x.get("createdAt",""),reverse=True)}
+return {"items":sorted(OBJECTIVES.values(),key=lambda x:x.get("createdAt",""),reverse=True)}
 
 def auth_db():
     x=sqlite3.connect(AUTH_DB);x.row_factory=sqlite3.Row    x.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT NOT NULL,created_at TEXT NOT NULL)")
@@ -240,7 +248,7 @@ async def profile(req:Request):
 @app.get("/api/integrations")
 async def integrations(req:Request):
     if not auth_user(req):raise HTTPException(401,detail="Authentication required.")
-    return {"connections":capability_status(),"skills":[{"id":"objective-orchestration","name":"Objective Orchestration","source":"native"},{"id":"openai-reasoning","name":"OpenAI Reasoning Agent","source":"OpenAI Agents SDK"},{"id":"mcp-interface","name":"MCP Agent Interface","source":"Model Context Protocol"},{"id":"web-intelligence","name":"Web Intelligence","source":"Firecrawl"},{"id":"browser-execution","name":"Browser Execution","source":"Browser Use"},{"id":"supervised-execution","name":"Supervised Execution","source":"WOW-Agent"},{"id":"parallel-runtime","name":"Parallel Runtime","source":"Orca"},{"id":"evidence-rendering","name":"Git Evidence","source":"Delta"}]}
+    return {"connections":[*capability_status(),openai_status()],"skills":[{"id":"objective-orchestration","name":"Objective Orchestration","source":"native"},{"id":"openai-reasoning","name":"OpenAI Reasoning Agent","source":"OpenAI Agents SDK"},{"id":"mcp-interface","name":"MCP Agent Interface","source":"Model Context Protocol"},{"id":"web-intelligence","name":"Web Intelligence","source":"Firecrawl"},{"id":"browser-execution","name":"Browser Execution","source":"Browser Use"},{"id":"supervised-execution","name":"Supervised Execution","source":"WOW-Agent"},{"id":"parallel-runtime","name":"Parallel Runtime","source":"Orca"},{"id":"evidence-rendering","name":"Git Evidence","source":"Delta"}]}
 @app.get("/")
 async def root(): return FileResponse(STATIC_ROOT/"index.html")
 
@@ -250,6 +258,7 @@ async def health():
     caps=capability_status()
     return {"status":"ok","version":"4.0.0","agents":[
       {"id":"browser","name":"Browser Use","connected":bool(BROWSER_URL or _browser_local_available()),"transport":"http" if BROWSER_URL else "local"},
+      openai_status(),
       openai_status(),
       {"id":"jev","name":"Jev","connected":bool(JEV_URL),"transport":"http"},
       {"id":"wow","name":"WOW-Agent","connected":bool(wow.get("connected")),"transport":"local-mcp"},
@@ -357,7 +366,19 @@ async def orca(payload:dict[str,Any]):
 @app.post("/api/delta/format")
 async def delta(payload:dict[str,Any]):
     try:return delta_diff(payload)
-    except (RuntimeError,ValueError) as e: raise HTTPException(503,detail=str(e))\n\n@app.post("/api/openai/run")\nasync def openai_route(payload:dict[str,Any],req:Request):\n    if not auth_user(req): raise HTTPException(401,detail="Authentication required.")\n    objective=str(payload.get("objective") or payload.get("query") or "").strip()\n    if not objective: raise HTTPException(422,detail="Objective is required.")\n    try:\n        result=await openai_run(objective,payload.get("context"))\n    except (RuntimeError,ValueError) as e:\n        raise HTTPException(503,detail=str(e))\n    record({"id":"openai-"+str(int(time.time()*1000)),"agent":"OpenAI Agent","objective":objective,"status":"completed","model":result.get("model")})\n    return result
+    except (RuntimeError,ValueError) as e: raise HTTPException(503,detail=str(e))
+
+@app.post("/api/openai/run")
+async def openai_route(payload:dict[str,Any],req:Request):
+    if not auth_user(req): raise HTTPException(401,detail="Authentication required.")
+    objective=str(payload.get("objective") or payload.get("query") or "").strip()
+    if not objective: raise HTTPException(422,detail="Objective is required.")
+    try:
+        result=await openai_run(objective,payload.get("context"))
+    except (RuntimeError,ValueError) as e:
+        raise HTTPException(503,detail=str(e))
+    record({"id":"openai-"+str(int(time.time()*1000)),"agent":"OpenAI Agent","objective":objective,"status":"completed","model":result.get("model")})
+    return result\n\n@app.post("/api/openai/run")\nasync def openai_route(payload:dict[str,Any],req:Request):\n    if not auth_user(req): raise HTTPException(401,detail="Authentication required.")\n    objective=str(payload.get("objective") or payload.get("query") or "").strip()\n    if not objective: raise HTTPException(422,detail="Objective is required.")\n    try:\n        result=await openai_run(objective,payload.get("context"))\n    except (RuntimeError,ValueError) as e:\n        raise HTTPException(503,detail=str(e))\n    record({"id":"openai-"+str(int(time.time()*1000)),"agent":"OpenAI Agent","objective":objective,"status":"completed","model":result.get("model")})\n    return result
 
 @app.get("/api/runs")
 async def runs():
