@@ -33,7 +33,7 @@ The server publishes:
 
 The authorization flow uses OAuth 2.1 authorization code + PKCE S256 and echoes the requested `resource` into the access-token audience.
 
-OpenAI's current MCP authentication guidance requires protected-resource metadata, authorization-server metadata, PKCE S256, resource binding, token verification, and scope enforcement for authenticated MCP servers. citeturn1search1
+OpenAI's current MCP authentication guidance requires protected-resource metadata, authorization-server metadata, PKCE S256, resource binding, token verification, and scope enforcement for authenticated MCP servers.
 
 ## Scopes
 
@@ -48,15 +48,15 @@ Deploy the MCP endpoint at:
 
 `https://YOUR-MCP-DOMAIN/mcp`
 
-Then add that MCP app/connector in ChatGPT Developer Mode. ChatGPT discovers the protected-resource metadata and can run the OAuth authorization-code + PKCE flow. The current OpenAI documentation specifies the stable callback `https://chatgpt.com/connector_platform_oauth_redirect` when the authorization server supports issuer identification. citeturn1search1turn0search2
+Then add that MCP app/connector in ChatGPT Developer Mode. ChatGPT discovers the protected-resource metadata and can run the OAuth authorization-code + PKCE flow. The current OpenAI documentation specifies the stable callback `https://chatgpt.com/connector_platform_oauth_redirect` when the authorization server supports issuer identification.
 
-For production, also enable OpenAI-managed mTLS at the edge if your hosting architecture supports it. OpenAI documents mTLS as an additional way to authenticate ChatGPT as the MCP client; OAuth remains the user authorization mechanism. citeturn0search0
+For production, also enable OpenAI-managed mTLS at the edge if your hosting architecture supports it. OpenAI documents mTLS as an additional way to authenticate ChatGPT as the MCP client; OAuth remains the user authorization mechanism.
 
 ## Other MCP-compatible agents
 
 The same `/mcp` endpoint can be consumed by other MCP clients. They must complete the OAuth flow and receive a token containing the scopes they need.
 
-For OpenAI Agents/API, remote MCP servers are configured with `server_url`; an OAuth access token can be supplied when the server requires authentication. citeturn0search7
+For OpenAI Agents/API, remote MCP servers are configured with `server_url`; an OAuth access token can be supplied when the server requires authentication.
 
 ## Controlled execution
 
@@ -92,4 +92,4 @@ No demo actions, fake receipts, arbitrary shell execution, or pre-approved objec
 6. Add rate limits and audit correlation IDs at the edge.
 7. Keep write scope disabled for users who should only inspect the system.
 
-OpenAI recommends testing the MCP endpoint with MCP Inspector and enforcing authorization server-side rather than relying on the model to decide whether an action is permitted. citeturn1search0turn1search1
+OpenAI recommends testing the MCP endpoint with MCP Inspector and enforcing authorization server-side rather than relying on the model to decide whether an action is permitted.
