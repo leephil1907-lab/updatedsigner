@@ -88,23 +88,29 @@ async def _graph_call(run,stage_id,label,fn):
 async def _execute_objective(run_id):
     run=objective_snapshot(run_id)
     if not run:return
+    run["status"]="running";run["startedAt"]=now();persist_objective(run)
     try:
         text=run["objective"]
         route=await _graph_call(run,"jev","Jev · objective routing",lambda: jev_route({"objective":text}))
         if route is None:
+            for sid in ["dify","firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed Jev dependency.")
             run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
         orch=await _graph_call(run,"dify","Dify · orchestration",lambda: dify({"query":text,"inputs":{"objective":text,"decision":route}}))
         if orch is None:
+            for sid in ["firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed Dify dependency.")
             run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
         fire_task=_graph_call(run,"firecrawl","Firecrawl · web intelligence",lambda: firecrawl("search",{"query":text,"limit":5}))
         browser_task=_graph_call(run,"browser","Browser Use · browser execution",lambda: browser_run({"task":text}))
         web,browser=await asyncio.gather(fire_task,browser_task)
         if web is None or browser is None:
+            for sid in ["wow","orca","delta"]:
+                if next(x for x in run["stages"] if x["id"]==sid)["status"]=="pending": _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by incomplete web/browser dependency.")
             run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
         wow_task=_graph_call(run,"wow","WOW-Agent · supervised execution",lambda: wow_activate({"goal":text,"launch_hud":True}))
         orca_task=_graph_call(run,"orca","Orca · parallel runtime",lambda: orca({"task":text,"prompt":text,"context":{"route":route,"orchestration":orch,"web":web,"browser":browser}}))
         wow,orca_result=await asyncio.gather(wow_task,orca_task)
         if wow is None or orca_result is None:
+            _stage(run,"delta","blocked",finishedAt=now(),error="Blocked by incomplete WOW-Agent/Orca dependency.")
             run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
         _stage(run,"delta","running",label="Delta · evidence boundary",startedAt=now())
         diff=run.get("diff") or ""
