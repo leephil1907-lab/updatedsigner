@@ -6,3 +6,5 @@ mcp>=1.19,<3
 
 PyJWT>=2.10,<3
 cryptography>=44,<47
+
+python-multipart>=0.0.20,<1
