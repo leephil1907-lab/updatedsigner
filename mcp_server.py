@@ -59,8 +59,10 @@ async def get_objective(run_id: str) -> dict:
     return await _get(f"/api/objectives/{run_id}")
 
 @mcp.tool()
-async def execute_objective(objective: str) -> dict:
-    """Start a real objective execution after the authenticated MCP client has been authorized."""
+async def execute_objective(objective: str, confirm: bool = False) -> dict:
+    """Start one real objective only when the caller explicitly supplies confirm=true and has mcp:write authorization."""
+    if not confirm:
+        return {"status":"confirmation_required","message":"Set confirm=true only after the user has explicitly approved this objective."}
     if not objective.strip():
         raise ValueError("objective is required")
     return await _post("/api/objectives/run", {"objective": objective})
