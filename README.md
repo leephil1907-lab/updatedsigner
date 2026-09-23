@@ -1,5 +1,7 @@
 # Agent Command Center
 
+A production-oriented multi-agent control surface with a React/Vite frontend and FastAPI gateway. The UI uses React Bits components (BlurText, SpotlightCard and TiltedCard) for the command experience.
+
 A production-oriented multi-agent control surface combining **Browser Use**, **Jev**, and **WOW-Agent**.
 
 The website deliberately contains **no demo catalogue, simulated browser execution, fabricated results, fake metrics, or pre-approved browser action list**. The UI reflects only connected runtime sources.
@@ -16,6 +18,10 @@ Decision/routing layer and live Decision Radar. Configure `JEV_URL` (or `DECISIO
 Integrated from [0xkaize/WOW-Agent](https://github.com/0xkaize/WOW-Agent). The integration calls its real `mcp_server.py` control-plane functions when `WOW_AGENT_ROOT` points at a local checkout.
 
 The WOW integration respects that project's visible-screen supervision model: activation, visible evidence, bounded host approval, fresh verification and pause-on-uncertainty. The web UI does not invent gameplay success.
+
+## Frontend
+
+The frontend is now React + Vite. Build it with `npm install && npm run build`; the production Docker image builds the frontend and serves it through the FastAPI gateway. React Bits components are kept under `src/reactbits/` with attribution in `THIRD_PARTY.md`.
 
 ## Run the gateway
 
