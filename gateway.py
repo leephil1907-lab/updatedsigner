@@ -5,9 +5,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import httpx
+import base64
+import html
+import urllib.parse
+import jwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from integrations.capabilities import status as capability_status, dify_run, firecrawl_action, orca_run, delta_diff
 from integrations.openai_runtime import status as openai_status, run as openai_run
@@ -25,6 +31,63 @@ AUTH_DB=RUNS/"auth.sqlite3"
 WOW_ROOT=os.getenv("WOW_AGENT_ROOT","").strip()
 BROWSER_URL=os.getenv("BROWSER_USE_URL","").rstrip("/")
 JEV_URL=(os.getenv("JEV_URL") or os.getenv("DECISION_RADAR_URL") or "").rstrip("/")
+OAUTH_ISSUER=os.getenv("OAUTH_ISSUER","").rstrip("/")
+OAUTH_RESOURCE=os.getenv("OAUTH_RESOURCE",OAUTH_ISSUER).rstrip("/")
+OAUTH_SCOPES={"mcp:read","mcp:write"}
+OAUTH_KEY_FILE=RUNS/"oauth_private.pem"
+OAUTH_CODE_TTL=300
+
+def oauth_issuer():
+    return OAUTH_ISSUER or OAUTH_RESOURCE
+
+def oauth_key():
+    if OAUTH_KEY_FILE.exists():
+        return serialization.load_pem_private_key(OAUTH_KEY_FILE.read_bytes(),password=None)
+    key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    OAUTH_KEY_FILE.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
+    try: OAUTH_KEY_FILE.chmod(0o600)
+    except OSError: pass
+    return key
+
+def oauth_jwk():
+    pub=oauth_key().public_key().public_numbers()
+    def b64(n): return base64.urlsafe_b64encode(n.to_bytes((n.bit_length()+7)//8,"big")).rstrip(b"=").decode()
+    return {"kty":"RSA","use":"sig","alg":"RS256","kid":"agent-command-center-1","n":b64(pub.n),"e":b64(pub.e)}
+
+def oauth_client_allowed(client_id,redirect_uri):
+    allowed=[x.strip() for x in os.getenv("OAUTH_CLIENT_IDS","").split(",") if x.strip()]
+    if client_id in allowed: return True
+    if not client_id.startswith("https://"): return False
+    try:
+        r=httpx.get(client_id,timeout=5,follow_redirects=True)
+        meta=r.json()
+        return redirect_uri in meta.get("redirect_uris",[]) or redirect_uri in meta.get("redirect_uri",[])
+    except Exception: return False
+
+def oauth_code_store(code,client_id,redirect_uri,challenge,scope,user_id,resource):
+    with auth_db() as db:
+        db.execute("CREATE TABLE IF NOT EXISTS oauth_codes(code TEXT PRIMARY KEY,client_id TEXT NOT NULL,redirect_uri TEXT NOT NULL,challenge TEXT NOT NULL,scope TEXT NOT NULL,user_id TEXT NOT NULL,resource TEXT NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0)")
+        db.execute("INSERT INTO oauth_codes VALUES(?,?,?,?,?,?,?,?,0)",(code,client_id,redirect_uri,challenge,scope,user_id,resource,int(time.time())+OAUTH_CODE_TTL));db.commit()
+
+def oauth_code_take(code):
+    with auth_db() as db:
+        row=db.execute("SELECT * FROM oauth_codes WHERE code=? AND used=0 AND expires_at>=?",(code,int(time.time()))).fetchone()
+        if not row:return None
+        db.execute("UPDATE oauth_codes SET used=1 WHERE code=?",(code,));db.commit();return dict(row)
+
+def oauth_verify(token,scope=None):
+    try:
+        claims=jwt.decode(token,oauth_key().public_key(),algorithms=["RS256"],issuer=oauth_issuer(),audience=OAUTH_RESOURCE,options={"require":["iss","sub","aud","exp","iat"]})
+        scopes=set(str(claims.get("scope","")).split())
+        if scope and scope not in scopes: raise ValueError("insufficient_scope")
+        return claims
+    except Exception: return None
+
+def oauth_bearer(req:Request,scope="mcp:read"):
+    auth=req.headers.get("authorization","")
+    if not auth.lower().startswith("bearer "): return None
+    return oauth_verify(auth.split(" ",1)[1].strip(),scope)
+
 @asynccontextmanager
 async def app_lifespan(_app):
     if mcp_server is not None:
@@ -243,6 +306,61 @@ async def profile(req:Request):
 async def integrations(req:Request):
     if not auth_user(req):raise HTTPException(401,detail="Authentication required.")
     return {"connections":[*capability_status(),openai_status()],"skills":[{"id":"objective-orchestration","name":"Objective Orchestration","source":"native"},{"id":"openai-reasoning","name":"OpenAI Reasoning Agent","source":"OpenAI Agents SDK"},{"id":"mcp-interface","name":"MCP Agent Interface","source":"Model Context Protocol"},{"id":"web-intelligence","name":"Web Intelligence","source":"Firecrawl"},{"id":"browser-execution","name":"Browser Execution","source":"Browser Use"},{"id":"supervised-execution","name":"Supervised Execution","source":"WOW-Agent"},{"id":"parallel-runtime","name":"Parallel Runtime","source":"Orca"},{"id":"evidence-rendering","name":"Git Evidence","source":"Delta"}]}
+
+@app.get("/.well-known/oauth-protected-resource")
+async def oauth_protected_resource():
+    issuer=oauth_issuer()
+    return {"resource":OAUTH_RESOURCE,"authorization_servers":[issuer],"scopes_supported":sorted(OAUTH_SCOPES),"resource_documentation":f"{issuer}/OPENAI_MCP.md"}
+
+@app.get("/.well-known/oauth-authorization-server")
+async def oauth_authorization_server():
+    issuer=oauth_issuer()
+    return {"issuer":issuer,"authorization_endpoint":f"{issuer}/oauth/authorize","token_endpoint":f"{issuer}/oauth/token","jwks_uri":f"{issuer}/oauth/jwks.json","scopes_supported":sorted(OAUTH_SCOPES),"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"client_id_metadata_document_supported":True,"authorization_response_iss_parameter_supported":True}
+
+@app.get("/oauth/jwks.json")
+async def oauth_jwks(): return {"keys":[oauth_jwk()]}
+
+@app.get("/oauth/authorize")
+async def oauth_authorize(request:Request):
+    q=request.query_params
+    required=["response_type","client_id","redirect_uri","code_challenge","code_challenge_method","resource"]
+    if any(not q.get(x) for x in required): raise HTTPException(400,detail="Missing OAuth parameters.")
+    if q.get("response_type")!="code" or q.get("code_challenge_method")!="S256" or q.get("resource")!=OAUTH_RESOURCE: raise HTTPException(400,detail="Unsupported OAuth request.")
+    if not oauth_client_allowed(q["client_id"],q["redirect_uri"]): raise HTTPException(400,detail="Unregistered OAuth client or redirect URI.")
+    scope=" ".join(sorted(set(q.get("scope","mcp:read").split()) & OAUTH_SCOPES)) or "mcp:read"
+    token=request.cookies.get("agent_session")
+    user=auth_user(request) if token else None
+    state=html.escape(q.get("state",""),quote=True); client=html.escape(q["client_id"],quote=True)
+    if not user:
+        hidden="".join(f'<input type="hidden" name="{html.escape(k,quote=True)}" value="{html.escape(v,quote=True)}">' for k,v in q.items())
+        return HTMLResponse(f"""<!doctype html><html><body style="font-family:system-ui;max-width:520px;margin:60px auto;padding:24px"><h1>Connect Agent Command Center</h1><p>Sign in to authorize this MCP client.</p><form method="post" action="/oauth/authorize">{hidden}<label>Email<br><input name="email" type="email" required></label><br><label>Password<br><input name="password" type="password" required></label><br><button>Sign in & authorize</button></form></body></html>""")
+    code=secrets.token_urlsafe(48);oauth_code_store(code,q["client_id"],q["redirect_uri"],q["code_challenge"],scope,user["id"],q["resource"])
+    sep="&" if "?" in q["redirect_uri"] else "?"
+    location=q["redirect_uri"]+sep+urllib.parse.urlencode({"code":code,"state":q.get("state",""),"iss":oauth_issuer()})
+    return RedirectResponse(location)
+
+@app.post("/oauth/authorize")
+async def oauth_authorize_post(request:Request):
+    form=await request.form(); email=str(form.get("email","")).strip().lower(); password=str(form.get("password",""))
+    with auth_db() as db: row=db.execute("SELECT * FROM users WHERE email=?",(email,)).fetchone()
+    if not row or not valid_password(password,row["password_hash"]): return HTMLResponse("<h1>Invalid credentials</h1><p>Go back and try again.</p>",status_code=401)
+    token=secrets.token_urlsafe(48); q=dict(form); q.pop("email",None);q.pop("password",None)
+    code=secrets.token_urlsafe(48);oauth_code_store(code,q["client_id"],q["redirect_uri"],q["code_challenge"],q.get("scope","mcp:read"),row["id"],q["resource"])
+    sep="&" if "?" in q["redirect_uri"] else "?"
+    return RedirectResponse(q["redirect_uri"]+sep+urllib.parse.urlencode({"code":code,"state":q.get("state",""),"iss":oauth_issuer()}),status_code=303)
+
+@app.post("/oauth/token")
+async def oauth_token(request:Request):
+    form=await request.form(); grant=str(form.get("grant_type",""))
+    if grant!="authorization_code": return {"error":"unsupported_grant_type"}
+    row=oauth_code_take(str(form.get("code","")))
+    if not row:return {"error":"invalid_grant"}
+    if row["client_id"]!=str(form.get("client_id","")) or row["redirect_uri"]!=str(form.get("redirect_uri","")) or row["resource"]!=str(form.get("resource","")): return {"error":"invalid_grant"}
+    verifier=str(form.get("code_verifier","")); expected=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    if not verifier or not secrets.compare_digest(expected,row["challenge"]):return {"error":"invalid_grant"}
+    issued=int(time.time()); token=jwt.encode({"iss":oauth_issuer(),"sub":row["user_id"],"aud":OAUTH_RESOURCE,"scope":row["scope"],"iat":issued,"exp":issued+3600},oauth_key(),algorithm="RS256",headers={"kid":"agent-command-center-1"})
+    return {"access_token":token,"token_type":"Bearer","expires_in":3600,"scope":row["scope"]}
+
 @app.get("/")
 async def root(): return FileResponse(STATIC_ROOT/"index.html")
 
