@@ -4,6 +4,7 @@ import{motion,AnimatePresence}from'motion/react';
 import{Activity,ArrowUpRight,Bot,BrainCircuit,ChevronRight,Command,Compass,Database,ExternalLink,FileDiff,Globe2,Layers3,LockKeyhole,Pause,Play,RefreshCw,Search,ServerCog,Settings2,ShieldCheck,Sparkles,Terminal,Workflow,X,Zap}from'lucide-react';
 import BlurText from'./reactbits/BlurText.jsx';
 import SpotlightCard from'./reactbits/SpotlightCard.jsx';
+import AgentOrbit from'./reactbits/AgentOrbit.jsx';
 import'./app.css';
 
 const api=async(path,opt={})=>{const r=await fetch(path,{credentials:'include',headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});if(!r.ok){let m='Request failed';try{m=(await r.json()).detail||m}catch{}throw Error(m)}return r.status===204?null:r.json()};
@@ -23,8 +24,23 @@ function Status({connected}){return <span className={'status '+(connected?'on':'
 function PageHead({title,kicker,action}){return <div className="pageHead"><div><div className="eyebrow">{kicker}</div><h1>{title}</h1></div>{action&&<button className="iconBtn" onClick={action}><RefreshCw size={14}/>Refresh</button>}</div>}
 function Empty({icon:Icon=Sparkles,title,text}){return <div className="empty"><Icon size={28}/><h3>{title}</h3><p>{text}</p></div>}
 
+
+const PIPELINE=[['jev','Jev'],['dify','Dify'],['firecrawl','Firecrawl'],['browser','Browser Use'],['wow','WOW-Agent'],['orca','Orca'],['delta','Delta']];
+async function runPipeline(text,setEvents){
+ const out={objective:text,stages:[]};
+ const call=async(id,label,path,body)=>{setEvents(e=>[...e, label+' · started']);try{const d=await api(path,{method:'POST',body:JSON.stringify(body)});out.stages.push({id,label,status:'completed',result:d});setEvents(e=>[...e,label+' · completed']);return d}catch(e){out.stages.push({id,label,status:'blocked',error:e.message});setEvents(e=>[...e,label+' · blocked: '+e.message]);return null}};
+ const route=await call('jev','Jev · objective routing','/api/jev/route',{objective:text});
+ const orch=await call('dify','Dify · orchestration','/api/dify/run',{query:text,inputs:{objective:text,decision:route||null}});
+ const web=await call('firecrawl','Firecrawl · web intelligence','/api/firecrawl/search',{query:text,limit:5});
+ const browser=await call('browser','Browser Use · browser execution','/api/browser/run',{task:text});
+ const wow=await call('wow','WOW-Agent · supervised execution','/api/wow/activate',{goal:text,launch_hud:true});
+ const orca=await call('orca','Orca · parallel runtime','/api/orca/run',{task:text,prompt:text,context:{route,orchestration:orch,web,browser,wow}});
+ out.evidence={delta:'Use the returned repository diff/output with /api/delta/format. No synthetic diff is generated.'};
+ setEvents(e=>[...e,'Delta · evidence boundary ready','Receipt · pipeline finished']);return out;
+}
+
 function App(){
- const[agents,setAgents]=useState([]),[agent,setAgent]=useState('browser'),[objective,setObjective]=useState(''),[busy,setBusy]=useState(false),[result,setResult]=useState(null),[events,setEvents]=useState([]),[runs,setRuns]=useState([]),[radar,setRadar]=useState([]),[caps,setCaps]=useState([]),[wow,setWow]=useState(null),[view,setView]=useState('command'),[toast,setToast]=useState(''),[palette,setPalette]=useState(false),inputRef=useRef(null);
+ const[agents,setAgents]=useState([]),[agent,setAgent]=useState('command'),[objective,setObjective]=useState(''),[busy,setBusy]=useState(false),[result,setResult]=useState(null),[events,setEvents]=useState([]),[runs,setRuns]=useState([]),[radar,setRadar]=useState([]),[caps,setCaps]=useState([]),[wow,setWow]=useState(null),[view,setView]=useState('command'),[toast,setToast]=useState(''),[palette,setPalette]=useState(false),inputRef=useRef(null);
  const online=agents.filter(a=>a.connected).length;
  const notify=m=>{setToast(m);setTimeout(()=>setToast(''),3000)};
  const refresh=async()=>{try{const h=await api('/api/health');setAgents(h.agents||[])}catch{setAgents([])}};
@@ -36,18 +52,18 @@ function App(){
  useEffect(()=>{if(view==='radar')loadRadar();if(view==='runs')loadRuns();if(view==='receipts')loadWow();if(view==='capabilities')loadCaps()},[view]);
  const execute=async()=>{const text=objective.trim();if(!text){notify('Enter an objective first.');inputRef.current?.focus();return}setBusy(true);setResult(null);setEvents([]);
   try{let d;
-   if(agent==='browser')d=await api('/api/browser/run',{method:'POST',body:JSON.stringify({task:text})});
+   if(agent==='command'){d=await runPipeline(text,setEvents)}else{if(agent==='browser')d=await api('/api/browser/run',{method:'POST',body:JSON.stringify({task:text})});
    if(agent==='jev')d=await api('/api/jev/route',{method:'POST',body:JSON.stringify({objective:text})});
    if(agent==='wow')d=await api('/api/wow/activate',{method:'POST',body:JSON.stringify({goal:text})});
    if(agent==='dify')d=await api('/api/dify/run',{method:'POST',body:JSON.stringify({query:text})});
    if(agent==='firecrawl')d=await api('/api/firecrawl/search',{method:'POST',body:JSON.stringify({query:text,limit:5})});
    if(agent==='orca')d=await api('/api/orca/run',{method:'POST',body:JSON.stringify({task:text,prompt:text})});
    if(agent==='delta')throw Error('Delta is an evidence renderer. Provide a real diff to /api/delta/format rather than treating it as an agent.');
-   setResult(d);setEvents([META[agent].name+' returned a live gateway result']);notify(META[agent].name+' completed');loadRuns();refresh();loadCaps();
+   }setResult(d);setEvents([META[agent].name+' returned a live gateway result']);notify(META[agent].name+' completed');loadRuns();refresh();loadCaps();
   }catch(e){setResult({error:e.message});setEvents(['ERROR · '+e.message]);notify(e.message)}finally{setBusy(false)}
  };
  const nav=id=>{setView(id);setPalette(false)};
- const selected=META[agent],Icon=selected.icon;
+ const selected=agent==='command'?{name:'Objective Graph',type:'FULL PIPELINE',desc:'Jev → Dify → Firecrawl/Browser → WOW/Orca → evidence → receipt',icon:Sparkles}:META[agent],Icon=selected.icon;
  return <div className="app"><Ambient/>
   <header className="topbar">
    <button className="brand" onClick={()=>nav('command')}><span className="brandmark"><Sparkles size={17}/></span><span><b>Agent Command</b><small>EXECUTION CONTROL PLANE</small></span></button>
@@ -56,7 +72,7 @@ function App(){
   </header>
   <main>
    {view==='command'&&<section className="page">
-    <div className="hero"><div><div className="eyebrow">MULTI-AGENT CONTROL PLANE · 4.0</div><BlurText text="Give it the objective. Keep the evidence." animateBy="words" className="heroTitle" delay={70}/><p>Coordinate real agents, web intelligence, orchestration and engineering evidence from one operational surface. Every status is sourced from a connected runtime.</p><div className="heroChips"><span><ShieldCheck size={12}/>No fabricated state</span><span><LockKeyhole size={12}/>Credentials stay server-side</span><span><Activity size={12}/>Live capability registry</span></div></div><div className="heroVisual"><div className="visualRing r1"/><div className="visualRing r2"/><div className="visualCore"><Sparkles size={34}/></div><div className="visualLabel">OBJECTIVE → EXECUTION → EVIDENCE</div></div></div>
+    <div className="hero"><div><div className="eyebrow">MULTI-AGENT CONTROL PLANE · 4.0</div><BlurText text="Give it the objective. Keep the evidence." animateBy="words" className="heroTitle" delay={70}/><p>Coordinate real agents, web intelligence, orchestration and engineering evidence from one operational surface. Every status is sourced from a connected runtime.</p><div className="heroChips"><span><Workflow size={12}/>Objective graph enabled</span><span><ShieldCheck size={12}/>No fabricated state</span><span><LockKeyhole size={12}/>Credentials stay server-side</span><span><Activity size={12}/>Live capability registry</span></div></div><div className="heroVisual"><AgentOrbit nodes={PIPELINE.map(([id,name])=>({id,name,icon:id==='jev'?'J':id==='dify'?'D':id==='firecrawl'?'F':id==='browser'?'B':id==='wow'?'W':id==='orca'?'O':'Δ'}))} active={agent}/><div className="visualRing r1"/><div className="visualRing r2"/><div className="visualCore"><Sparkles size={34}/></div><div className="visualLabel">OBJECTIVE → EXECUTION → EVIDENCE</div></div></div>
     <div className="agentGrid">{Object.entries(META).map(([id,m])=>{const a=agents.find(x=>x.id===id)||caps.find(x=>x.id===id);const I=m.icon;return <SpotlightCard key={id} className={'agentCard '+(agent===id?'selected':'')} spotlightColor="rgba(112,224,155,.16)"><button onClick={()=>setAgent(id)} className="agentButton"><div className="agentTop"><span className="agentIcon"><I size={18}/></span><span className="agentType">{m.type}</span></div><h3>{m.name}</h3><p>{m.desc}</p><Status connected={!!a?.connected}/></button></SpotlightCard>})}</div>
     <SpotlightCard className="composer" spotlightColor="rgba(112,224,155,.09)"><div className="sectionTop"><div><span className="eyebrow">OBJECTIVE INPUT</span><h2>What needs to happen?</h2></div><span className="shortcut">CTRL / ⌘ + ENTER</span></div><textarea ref={inputRef} value={objective} onChange={e=>setObjective(e.target.value)} onKeyDown={e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')execute()}} placeholder="Describe the outcome in natural language. No pre-approved action catalogue is injected."/><div className="composerFoot"><div className="routes">{Object.entries(META).map(([id,m])=><button key={id} className={agent===id?'route active':'route'} onClick={()=>setAgent(id)}><m.icon size={12}/>{m.name}</button>)}</div><button className="execute" onClick={execute} disabled={busy}>{busy?<><Activity size={14}/>Executing…</>:<><Zap size={14}/>Execute objective</>}<kbd>↵</kbd></button></div></SpotlightCard>
     <div className="workspace"><SpotlightCard className="livePanel"><div className="sectionTop"><div><span className="eyebrow">LIVE EXECUTION</span><h2>Agent workspace</h2></div><span className={'pill '+(busy?'live':'')}>{busy?'RUNNING':result?'RETURNED':'IDLE'}</span></div>{!result&&!busy?<Empty icon={Icon} title="Awaiting an objective" text="Real agent output, execution events and evidence appear only after a connected runtime is called."/>:<><div className="trace"><span><Icon size={13}/><b>{selected.name}</b></span><span>{busy?'EXECUTING':'RETURNED'}</span></div><pre className="result">{JSON.stringify(result,null,2)}</pre><div className="events">{events.map((e,i)=><div key={i}><ChevronRight size={12}/>{e}</div>)}</div></>}</SpotlightCard>
