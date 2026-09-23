@@ -38,7 +38,7 @@ OpenAI's current MCP authentication guidance requires protected-resource metadat
 ## Scopes
 
 - `mcp:read` — inspect control-plane status, capabilities, runs and objectives.
-- `mcp:write` — required for `execute_objective`.
+- `mcp:write` — required for `execute_objective`; the tool also requires `confirm=true` so a client cannot accidentally execute on a missing approval.
 
 The MCP endpoint requires a valid bearer token. Write calls without `mcp:write` are rejected before the tool executes.
 
