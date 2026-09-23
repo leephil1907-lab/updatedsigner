@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, importlib.util, json, os, sys, time, uuid, sqlite3, hashlib, secrets
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from integrations.capabilities import status as capability_status, dify_run, firecrawl_action, orca_run, delta_diff
+from integrations.openai_runtime import status as openai_status, run as openai_run
+try:
+    from mcp_server import mcp as mcp_server
+except Exception:
+    mcp_server = None
 
 ROOT=Path(__file__).resolve().parent
 RUNS=Path(os.getenv("AGENT_CENTER_DATA","~/.agent-command-center")).expanduser(); RUNS.mkdir(parents=True,exist_ok=True)
@@ -19,10 +25,20 @@ AUTH_DB=RUNS/"auth.sqlite3"
 WOW_ROOT=os.getenv("WOW_AGENT_ROOT","").strip()
 BROWSER_URL=os.getenv("BROWSER_USE_URL","").rstrip("/")
 JEV_URL=(os.getenv("JEV_URL") or os.getenv("DECISION_RADAR_URL") or "").rstrip("/")
-app=FastAPI(title="Agent Command Center Gateway",version="4.0.0")
+@asynccontextmanager
+async def app_lifespan(_app):
+    if mcp_server is not None:
+        async with mcp_server.session_manager.run():
+            yield
+    else:
+        yield
+
+app=FastAPI(title="Agent Command Center Gateway",version="4.1.0",lifespan=app_lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv("CORS_ORIGINS","*").split(","),allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 FRONTEND=ROOT/"dist"; STATIC_ROOT=FRONTEND if FRONTEND.exists() else ROOT
 app.mount("/assets",StaticFiles(directory=STATIC_ROOT/"assets" if (STATIC_ROOT/"assets").exists() else STATIC_ROOT),name="assets")
+if mcp_server is not None:
+    app.mount("/mcp",mcp_server.streamable_http_app(host="0.0.0.0",stateless_http=True,json_response=True),name="mcp")
 _wow=None
 
 def now(): return datetime.now(timezone.utc).isoformat()
@@ -63,7 +79,8 @@ def persist_objective(run):
 
 GRAPH=[
     {"id":"jev","label":"Jev","kind":"decision","depends":[]},
-    {"id":"dify","label":"Dify","kind":"orchestration","depends":["jev"]},
+    {"id":"openai","label":"OpenAI Agent","kind":"reasoning","depends":["jev"]},
+    {"id":"dify","label":"Dify","kind":"orchestration","depends":["openai"]},
     {"id":"firecrawl","label":"Firecrawl","kind":"web","depends":["dify"]},
     {"id":"browser","label":"Browser Use","kind":"browser","depends":["dify"]},
     {"id":"wow","label":"WOW-Agent","kind":"supervision","depends":["firecrawl","browser"]},
@@ -94,9 +111,13 @@ async def _execute_objective(run_id):
         text=run["objective"]
         route=await _graph_call(run,"jev","Jev · objective routing",lambda: jev_route({"objective":text}))
         if route is None:
-            for sid in ["dify","firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed Jev dependency.")
+            for sid in ["openai","dify","firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed Jev dependency.")
             run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
-        orch=await _graph_call(run,"dify","Dify · orchestration",lambda: dify({"query":text,"inputs":{"objective":text,"decision":route}}))
+        reasoning=await _graph_call(run,"openai","OpenAI Agent · reasoning",lambda: openai_run(text,{"jev":route}))
+        if reasoning is None:
+            for sid in ["dify","firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed OpenAI Agent dependency.")
+            run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
+        orch=await _graph_call(run,"dify","Dify · orchestration",lambda: dify({"query":text,"inputs":{"objective":text,"decision":route,"openai":reasoning}}))
         if orch is None:
             for sid in ["firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed Dify dependency.")
             run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
@@ -176,8 +197,7 @@ async def auth_signup(payload:dict[str,Any],response:Response):
     if not name or "@" not in email or len(password)<8:raise HTTPException(422,detail="Name, valid email and password of at least 8 characters are required.")
     uid="usr_"+secrets.token_hex(10);token=secrets.token_urlsafe(32)
     try:
-        with auth_db() as x:x.execute("INSERT INTO users VALUES(?,?,?,?,?)",(uid,email,hash_password(password),name,now()));x.execute("INSERT INTO sessions VALUES(?,?,?)",(token,uid,now()));x.commit()
-    except sqlite3.IntegrityError:raise HTTPException(409,detail="An account with this email already exists.")
+        with auth_db() as x:x.execute("INSERT INTO users VALUES(?,?,?,?,?)",(uid,email,hash_password(password),name,now()));x.execute("INSERT INTO sessions VALUES(?,?,?)",(token,uid,now()));x.commit()    except sqlite3.IntegrityError:raise HTTPException(409,detail="An account with this email already exists.")
     response.set_cookie("agent_session",token,httponly=True,samesite="lax",secure=os.getenv("COOKIE_SECURE","0")=="1",max_age=2592000)
     return {"user":public_user({"id":uid,"email":email,"name":name,"created_at":now()})}
 
@@ -217,7 +237,7 @@ async def profile(req:Request):
 @app.get("/api/integrations")
 async def integrations(req:Request):
     if not auth_user(req):raise HTTPException(401,detail="Authentication required.")
-    return {"connections":capability_status(),"skills":[{"id":"objective-orchestration","name":"Objective Orchestration","source":"native"},{"id":"web-intelligence","name":"Web Intelligence","source":"Firecrawl"},{"id":"browser-execution","name":"Browser Execution","source":"Browser Use"},{"id":"supervised-execution","name":"Supervised Execution","source":"WOW-Agent"},{"id":"parallel-runtime","name":"Parallel Runtime","source":"Orca"},{"id":"evidence-rendering","name":"Git Evidence","source":"Delta"}]}
+    return {"connections":capability_status(),"skills":[{"id":"objective-orchestration","name":"Objective Orchestration","source":"native"},{"id":"openai-reasoning","name":"OpenAI Reasoning Agent","source":"OpenAI Agents SDK"},{"id":"mcp-interface","name":"MCP Agent Interface","source":"Model Context Protocol"},{"id":"web-intelligence","name":"Web Intelligence","source":"Firecrawl"},{"id":"browser-execution","name":"Browser Execution","source":"Browser Use"},{"id":"supervised-execution","name":"Supervised Execution","source":"WOW-Agent"},{"id":"parallel-runtime","name":"Parallel Runtime","source":"Orca"},{"id":"evidence-rendering","name":"Git Evidence","source":"Delta"}]}
 @app.get("/")
 async def root(): return FileResponse(STATIC_ROOT/"index.html")
 
@@ -227,12 +247,13 @@ async def health():
     caps=capability_status()
     return {"status":"ok","version":"4.0.0","agents":[
       {"id":"browser","name":"Browser Use","connected":bool(BROWSER_URL or _browser_local_available()),"transport":"http" if BROWSER_URL else "local"},
+      openai_status(),
       {"id":"jev","name":"Jev","connected":bool(JEV_URL),"transport":"http"},
       {"id":"wow","name":"WOW-Agent","connected":bool(wow.get("connected")),"transport":"local-mcp"},
       *caps]}
 
 @app.get("/api/capabilities")
-async def capabilities(): return {"items":capability_status()}
+async def capabilities(): return {"items":[*capability_status(),openai_status()]}
 
 def _browser_local_available():
     try: import browser_use; return True
@@ -333,7 +354,7 @@ async def orca(payload:dict[str,Any]):
 @app.post("/api/delta/format")
 async def delta(payload:dict[str,Any]):
     try:return delta_diff(payload)
-    except (RuntimeError,ValueError) as e: raise HTTPException(503,detail=str(e))
+    except (RuntimeError,ValueError) as e: raise HTTPException(503,detail=str(e))\n\n@app.post("/api/openai/run")\nasync def openai_route(payload:dict[str,Any],req:Request):\n    if not auth_user(req): raise HTTPException(401,detail="Authentication required.")\n    objective=str(payload.get("objective") or payload.get("query") or "").strip()\n    if not objective: raise HTTPException(422,detail="Objective is required.")\n    try:\n        result=await openai_run(objective,payload.get("context"))\n    except (RuntimeError,ValueError) as e:\n        raise HTTPException(503,detail=str(e))\n    record({"id":"openai-"+str(int(time.time()*1000)),"agent":"OpenAI Agent","objective":objective,"status":"completed","model":result.get("model")})\n    return result
 
 @app.get("/api/runs")
 async def runs():
