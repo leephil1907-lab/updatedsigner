@@ -18,7 +18,7 @@ BROWSER_URL=os.getenv("BROWSER_USE_URL","").rstrip("/")
 JEV_URL=(os.getenv("JEV_URL") or os.getenv("DECISION_RADAR_URL") or "").rstrip("/")
 app=FastAPI(title="Agent Command Center Gateway",version="2.0.0")
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv("CORS_ORIGINS","*").split(","),allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
-app.mount("/assets",StaticFiles(directory=ROOT),name="assets")
+FRONTEND=ROOT/"dist"\nSTATIC_ROOT=FRONTEND if FRONTEND.exists() else ROOT\napp.mount("/assets",StaticFiles(directory=STATIC_ROOT/"assets" if (STATIC_ROOT/"assets").exists() else STATIC_ROOT),name="assets")
 _wow=None
 def now(): return datetime.now(timezone.utc).isoformat()
 def record(x):
@@ -40,7 +40,7 @@ def wow_status():
  try:return {"connected":True,**m.status()}
  except Exception as e:return {"connected":False,"message":str(e)}
 @app.get("/")
-async def root():return FileResponse(ROOT/"index.html")
+async def root():return FileResponse(STATIC_ROOT/"index.html")
 @app.get("/api/health")
 async def health():
  return {"status":"ok","agents":[{"id":"browser","connected":bool(BROWSER_URL or _browser_local_available()),"transport":"http" if BROWSER_URL else "local"},{"id":"jev","connected":bool(JEV_URL),"transport":"http"},{"id":"wow","connected":bool(wow_status().get("connected")),"transport":"local-mcp"}]}
