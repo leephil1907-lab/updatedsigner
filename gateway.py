@@ -250,9 +250,8 @@ async def root(): return FileResponse(STATIC_ROOT/"index.html")
 async def health():
     wow=wow_status()
     caps=capability_status()
-    return {"status":"ok","version":"4.0.0","agents":[
+    return {"status":"ok","version":"4.1.0","agents":[
       {"id":"browser","name":"Browser Use","connected":bool(BROWSER_URL or _browser_local_available()),"transport":"http" if BROWSER_URL else "local"},
-      openai_status(),
       openai_status(),
       {"id":"jev","name":"Jev","connected":bool(JEV_URL),"transport":"http"},
       {"id":"wow","name":"WOW-Agent","connected":bool(wow.get("connected")),"transport":"local-mcp"},
