@@ -12,7 +12,8 @@ from typing import Any
 import httpx
 
 try:
-    from agents import Agent, Runner, function_tool
+    from agents import Agent, Runner, ModelSettings, function_tool
+    from openai.types.shared import Reasoning
 except Exception:  # dependency may be absent during local development
     Agent = Runner = None
     function_tool = None
