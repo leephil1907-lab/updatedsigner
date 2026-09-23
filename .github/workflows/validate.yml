@@ -11,9 +11,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m py_compile gateway.py
-      - run: python - <<'PY'
-import pathlib
-for p in ["index.html","styles.css","app.js","README.md"]:
-    assert pathlib.Path(p).exists(), p
-print("frontend files present")
-PY
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm install
+      - run: npm run build
+      - run: test -f dist/index.html
