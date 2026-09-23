@@ -34,7 +34,7 @@ async def app_lifespan(_app):
         yield
 
 app=FastAPI(title="Agent Command Center Gateway",version="4.1.0",lifespan=app_lifespan)
-app.add_middleware(CORSMiddleware,allow_origins=os.getenv("CORS_ORIGINS","*").split(","),allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
+app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:8000").split(",") if x.strip()],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 FRONTEND=ROOT/"dist"; STATIC_ROOT=FRONTEND if FRONTEND.exists() else ROOT
 app.mount("/assets",StaticFiles(directory=STATIC_ROOT/"assets" if (STATIC_ROOT/"assets").exists() else STATIC_ROOT),name="assets")
 if mcp_server is not None:
@@ -113,10 +113,14 @@ async def _execute_objective(run_id):
         if route is None:
             for sid in ["openai","dify","firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed Jev dependency.")
             run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
-        reasoning=await _graph_call(run,"openai","OpenAI Agent · reasoning",lambda: openai_run(text,{"jev":route}))
-        if reasoning is None:
-            for sid in ["dify","firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed OpenAI Agent dependency.")
-            run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
+        if openai_status().get("connected"):
+            reasoning=await _graph_call(run,"openai","OpenAI Agent · reasoning",lambda: openai_run(text,{"jev":route}))
+            if reasoning is None:
+                for sid in ["dify","firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed OpenAI Agent dependency.")
+                run["status"]="blocked";run["finishedAt"]=now();persist_objective(run);return
+        else:
+            reasoning=None
+            _stage(run,"openai","not_configured",finishedAt=now(),error="OPENAI_API_KEY or Agents SDK is not configured; objective continues without OpenAI reasoning.")
         orch=await _graph_call(run,"dify","Dify · orchestration",lambda: dify({"query":text,"inputs":{"objective":text,"decision":route,"openai":reasoning}}))
         if orch is None:
             for sid in ["firecrawl","browser","wow","orca","delta"]: _stage(run,sid,"blocked",finishedAt=now(),error="Blocked by failed Dify dependency.")
@@ -176,8 +180,7 @@ async def objectives():
     return {"items":sorted(OBJECTIVES.values(),key=lambda x:x.get("createdAt",""),reverse=True)}
 
 def auth_db():
-    x=sqlite3.connect(AUTH_DB);x.row_factory=sqlite3.Row
-    x.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT NOT NULL,created_at TEXT NOT NULL)")
+    x=sqlite3.connect(AUTH_DB);x.row_factory=sqlite3.Row    x.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT NOT NULL,created_at TEXT NOT NULL)")
     x.execute("CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL,created_at TEXT NOT NULL)")
     x.commit();return x
 def hash_password(password,salt=None):
