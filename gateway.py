@@ -115,10 +115,11 @@ async def _execute_objective(run_id):
         _stage(run,"delta","running",label="Delta · evidence boundary",startedAt=now())
         diff=run.get("diff") or ""
         if not diff:
-            _stage(run,"delta","blocked",finishedAt=now(),error="No real Git diff was supplied; evidence renderer will not fabricate one.")
-            run["status"]="partial";run["finishedAt"]=now();run["receipt"]={"status":"partial","objective":text,"reason":"Execution completed but no real repository diff was supplied to Delta."};persist_objective(run);return
-        evidence=delta_diff({"diff":diff})
-        _stage(run,"delta","completed",finishedAt=now(),result=evidence)
+            _stage(run,"delta","not_applicable",finishedAt=now(),error="No repository diff supplied; Delta did not fabricate evidence.")
+            evidence={"mode":"runtime-receipt","sources":[x["id"] for x in run["stages"] if x.get("status")=="completed"],"note":"No Git diff was supplied, so the receipt contains runtime evidence only."}
+        else:
+            evidence=delta_diff({"diff":diff})
+            _stage(run,"delta","completed",finishedAt=now(),result=evidence)
         run["status"]="completed";run["finishedAt"]=now()
         run["receipt"]={"status":"completed","objective":text,"stages":run["stages"],"evidence":evidence,"completedAt":run["finishedAt"]}
         persist_objective(run)
