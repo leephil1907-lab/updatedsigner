@@ -1,4 +1,5 @@
 export const BRANDING={
+  openai:{kind:'wordmark',label:'OpenAI',src:null,alt:'OpenAI'},
   jev:{kind:'wordmark',label:'Jev',src:null,alt:'Jev'},
   dify:{kind:'logo',label:'Dify',src:'https://raw.githubusercontent.com/langgenius/dify/main/web/public/logo/logo-site-dark.png',alt:'Dify'},
   firecrawl:{kind:'logo',label:'Firecrawl',src:'https://raw.githubusercontent.com/firecrawl/firecrawl/main/img/firecrawl_logo.png',alt:'Firecrawl'},
