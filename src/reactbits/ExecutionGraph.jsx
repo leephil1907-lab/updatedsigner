@@ -3,10 +3,10 @@ import {motion} from 'motion/react';
 import {BrandMark} from './branding.js';
 
 const POS=[
- {id:'jev',x:5,y:50},{id:'dify',x:19,y:50},{id:'firecrawl',x:38,y:25},{id:'browser',x:38,y:75},
- {id:'wow',x:62,y:25},{id:'orca',x:62,y:75},{id:'delta',x:86,y:50}
+ {id:'jev',x:4,y:50},{id:'openai',x:18,y:50},{id:'dify',x:32,y:50},{id:'firecrawl',x:48,y:25},{id:'browser',x:48,y:75},
+ {id:'wow',x:68,y:25},{id:'orca',x:68,y:75},{id:'delta',x:90,y:50}
 ];
-const EDGES=[['jev','dify'],['dify','firecrawl'],['dify','browser'],['firecrawl','wow'],['browser','wow'],['firecrawl','orca'],['browser','orca'],['wow','delta'],['orca','delta']];
+const EDGES=[['jev','openai'],['openai','dify'],['dify','firecrawl'],['dify','browser'],['firecrawl','wow'],['browser','wow'],['firecrawl','orca'],['browser','orca'],['wow','delta'],['orca','delta']];
 export default function ExecutionGraph({stages=[],running=false}){
  const by=Object.fromEntries(stages.map(s=>[s.id,s]));
  const state=id=>by[id]?.status||'pending';
