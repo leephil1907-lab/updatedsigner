@@ -98,6 +98,45 @@ async def app_lifespan(_app):
 
 app=FastAPI(title="Agent Command Center Gateway",version="4.1.0",lifespan=app_lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:8000").split(",") if x.strip()],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
+
+class MCPAuthMiddleware:
+    def __init__(self,app): self.app=app
+    async def __call__(self,scope,receive,send):
+        if scope["type"]!="http" or not scope.get("path","").startswith("/mcp"):
+            return await self.app(scope,receive,send)
+        headers={k.decode().lower():v.decode() for k,v in scope.get("headers",[])}
+        auth=headers.get("authorization","")
+        token=auth.split(" ",1)[1].strip() if auth.lower().startswith("bearer ") else ""
+        claims=oauth_verify(token,"mcp:read") if token else None
+        if not claims:
+            resource=OAUTH_RESOURCE
+            issuer=oauth_issuer()
+            body=b'{"error":"unauthorized","error_description":"Valid OAuth access token required."}'
+            await send({"type":"http.response.start","status":401,"headers":[(b"content-type",b"application/json"),(b"www-authenticate",f'Bearer resource_metadata="{resource}/.well-known/oauth-protected-resource", scope="mcp:read"'.encode())]})
+            await send({"type":"http.response.body","body":body})
+            return
+        scope_set=set(str(claims.get("scope","")).split())
+        # Buffer MCP POSTs only long enough to enforce the write scope on the execute tool.
+        if scope.get("method","GET")=="POST" and "mcp:write" not in scope_set:
+            chunks=[]; more=True
+            while more:
+                msg=await receive(); chunks.append(msg.get("body",b"")); more=msg.get("more_body",False)
+            body=b"".join(chunks)
+            if b'"execute_objective"' in body or b"'execute_objective'" in body:
+                response_body=b'{"error":"insufficient_scope","error_description":"mcp:write scope is required for execute_objective."}'
+                await send({"type":"http.response.start","status":403,"headers":[(b"content-type",b"application/json"),(b"www-authenticate",f'Bearer resource_metadata="{resource}/.well-known/oauth-protected-resource", error="insufficient_scope", scope="mcp:write"'.encode())]})
+                await send({"type":"http.response.body","body":response_body})
+                return
+            sent=False
+            async def replay():
+                nonlocal sent
+                if not sent:
+                    sent=True; return {"type":"http.request","body":body,"more_body":False}
+                return {"type":"http.request","body":b"","more_body":False}
+            return await self.app(scope,replay,send)
+        return await self.app(scope,receive,send)
+
+app.add_middleware(MCPAuthMiddleware)
 FRONTEND=ROOT/"dist"; STATIC_ROOT=FRONTEND if FRONTEND.exists() else ROOT
 app.mount("/assets",StaticFiles(directory=STATIC_ROOT/"assets" if (STATIC_ROOT/"assets").exists() else STATIC_ROOT),name="assets")
 if mcp_server is not None:
