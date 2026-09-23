@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080b0a"><meta name="description" content="Agent Command Center — Browser Use, Jev and WOW-Agent in one supervised workspace.">
+<title>Agent Command Center</title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="noise"></div>
+<header class="topbar">
+  <a class="brand" href="#home"><span class="brandmark">AC</span><span><b>Agent Command</b><small>CONTROL CENTER</small></span></a>
+  <nav><a href="#home">Command</a><a href="#runs">Runs</a><a href="#radar">Jev Radar</a><a href="#receipts">Receipts</a></nav>
+  <div class="topright"><span id="globalState" class="connection"><i></i>Checking agents</span><button id="cmd" class="kbd">⌘ K</button></div>
+</header>
+<main>
+<section id="home" class="view">
+  <div class="hero"><div><div class="eyebrow">MULTI-AGENT CONTROL PLANE · v2</div><h1>One objective.<br><em>The right agent.</em></h1><p>Route real work through Browser Use, Jev, or the supervised WOW-Agent host. Every result is evidence-backed; disconnected agents remain visibly disconnected.</p></div><div class="hero-orbit"><span></span><span></span><span></span><b>3</b><small>AGENT<br>ROUTES</small></div></div>
+  <div class="agents" id="agents"></div>
+  <div class="compose panel">
+    <div class="compose-head"><div><span class="kicker">OBJECTIVE</span><h2>What needs to happen?</h2></div><span class="hint">Ctrl / ⌘ + Enter</span></div>
+    <textarea id="objective" placeholder="Describe the outcome in natural language. The selected agent receives the objective exactly as entered." rows="4"></textarea>
+    <div class="compose-foot"><div class="route-select"><span>ROUTE</span><button data-agent="browser" class="route active">Browser Use</button><button data-agent="jev" class="route">Jev</button><button data-agent="wow" class="route">WOW-Agent</button></div><button id="execute" class="execute">Execute objective <kbd>↵</kbd></button></div>
+  </div>
+  <div class="grid">
+    <section class="panel live"><div class="paneltitle"><div><span class="kicker">LIVE EXECUTION</span><h2>Agent workspace</h2></div><span id="runState" class="pill">IDLE</span></div>
+      <div id="emptyLive" class="empty"><div class="glyph">◎</div><h3>Awaiting an objective</h3><p>Live state, returned actions, evidence and receipts will appear here after a real agent call.</p></div>
+      <div id="live" class="hidden">
+        <div class="tracebar"><span id="traceAgent">—</span><span id="traceId">—</span><span id="traceStatus">—</span></div>
+        <div class="resultbox"><span>RETURNED RESULT</span><pre id="result">—</pre></div>
+        <div class="sectionlabel">EVENT TRACE</div><div id="events"></div>
+      </div>
+    </section>
+    <aside class="panel decision"><div class="paneltitle"><div><span class="kicker">ROUTING</span><h2>Decision layer</h2></div></div>
+      <div id="routeEmpty" class="empty compact"><div class="glyph">◇</div><h3>No route yet</h3><p>Jev can route an objective to the appropriate execution surface when configured.</p></div>
+      <div id="routeData" class="hidden"><div class="routehero"><span>SELECTED AGENT</span><b id="routeName">—</b><small id="routeReason">—</small></div><dl><div><dt>Capability</dt><dd id="routeCapability">—</dd></div><div><dt>Safety</dt><dd id="routeSafety">—</dd></div><div><dt>Source</dt><dd id="routeSource">—</dd></div></dl></div>
+    </aside>
+  </div>
+</section>
+
+<section id="runs" class="view"><div class="pagehead"><div><div class="eyebrow">AUDITABLE HISTORY</div><h1>Runs</h1><p>Only records created by real gateway calls are shown.</p></div><button class="outline" onclick="loadRuns()">Refresh</button></div><div id="runsList" class="list"><div class="empty"><h3>No runs recorded</h3><p>Execute a real objective to create the first run.</p></div></div></section>
+
+<section id="radar" class="view"><div class="pagehead"><div><div class="eyebrow">JEV DISCOVERY</div><h1>Decision Radar</h1><p>Live records from your configured Jev/Radar source. No bundled catalogue.</p></div><button class="outline" onclick="loadRadar()">Refresh</button></div><div class="toolbar"><input id="radarQ" placeholder="Search live radar…"><select id="radarCategory"><option value="">All categories</option></select></div><div id="radarList" class="cards"><div class="empty wide"><h3>Radar not connected</h3><p>Set <code>JEV_URL</code> or <code>DECISION_RADAR_URL</code> on the gateway.</p></div></div></section>
+
+<section id="receipts" class="view"><div class="pagehead"><div><div class="eyebrow">PROOF & STATE</div><h1>Receipts</h1><p>WOW-Agent receipts are sourced from its visible-screen supervision layer.</p></div><button class="outline" onclick="loadWow()">Refresh</button></div><div class="receipt-layout"><div class="panel"><div class="paneltitle"><div><span class="kicker">WOW-AGENT</span><h2>Supervision state</h2></div><span id="wowPill" class="pill">OFFLINE</span></div><div id="wowState" class="statecard"><span>STATE</span><b>Not connected</b><p>The gateway loads the real WOW-Agent MCP/control-plane package when WOW_AGENT_ROOT is configured.</p></div></div><div class="panel"><div class="paneltitle"><div><span class="kicker">SAFETY CONTRACT</span><h2>Boundaries</h2></div></div><ul class="rules"><li>Visible pixels only</li><li>Host approval required</li><li>Fresh verification after state-changing actions</li><li>Ambiguity pauses execution</li><li>No memory, injection or private game APIs</li></ul></div></div></section>
+</main>
+<div id="palette" class="overlay hidden"><div class="palette"><input id="paletteInput" placeholder="Jump to a workspace…"><div id="paletteItems"></div><small>ESC close · Enter open</small></div></div>
+<div id="toast" class="toast hidden"></div>
+<script src="app.js" defer></script>
+</body></html>
